@@ -5,8 +5,12 @@
 #include <chrono>
 #include <catch2/catch_test_macros.hpp>
 #include <iomanip>
+#include <cstring>
+#include <string>
+#include <arpa/inet.h>
 #include "../src/config.h"
 #include "../src/flagchecker.h"
+#include "../src/redis.h"
 #include "../src/libraries/base64.h"
 
 using namespace std;
@@ -112,5 +116,70 @@ TEST_CASE("Parse (legacy) Configs") {
 		Config::load("../tests/testconfig3.json");
 		REQUIRE(Config::nopTeamId == 2);
 		REQUIRE(Config::flagRoundsValid == 20);
+	}
+
+	SECTION("testconfig4.json (nop_team_id = 0)") {
+		Config::load("../tests/testconfig4.json");
+		REQUIRE(Config::nopTeamId == 0);
+		REQUIRE(Config::flagRoundsValid == 10);
+	}
+}
+
+
+// Builds a wire-format flag ("SAAR{<base64>}") from the given fields.
+// mac is filled with a valid HMAC when valid_mac = true, otherwise zeroed.
+static std::string build_flag(uint16_t team_id, uint16_t service_id, uint16_t round, uint16_t payload, bool valid_mac) {
+	FlagFormat f{};
+	f.round = round;
+	f.team_id = team_id;
+	f.service_id = service_id;
+	f.payload = payload;
+	if (valid_mac) {
+		create_hmac(&f, &f.mac, f.mac);
+	} else {
+		memset(f.mac, 0, sizeof f.mac);
+	}
+	char b64[FLAG_LENGTH_B64 + 1] = {0};
+	base64_encode((const unsigned char *) &f, sizeof f, b64);
+	return Config::flagPrefix + "{" + std::string(b64, FLAG_LENGTH_B64) + "}";
+}
+
+static struct sockaddr_in make_team_addr(const char *ip) {
+	struct sockaddr_in addr{};
+	addr.sin_family = AF_INET;
+	inet_pton(AF_INET, ip, &addr.sin_addr);
+	return addr;
+}
+
+
+TEST_CASE("NOP team flag rejection") {
+	// testconfig4: nop_team_id = 0 (NOP team is team 0), team_range 127.0.0.0/16-ish
+	Config::load("../tests/testconfig4.json");
+	initModelSizes(255, 10);
+	Redis::state = RUNNING;
+	Redis::current_round = 1;
+	// submitter: team 2 (127.0.2.x per testconfig team_range)
+	struct sockaddr_in addr = make_team_addr("127.0.2.9");
+
+	SECTION("flag of NOP team 0 is rejected") {
+		std::string flag = build_flag(0, 1, 1, 0, true);
+		const char *answer = progress_flag(flag.c_str(), (int) flag.size(), &addr, nullptr);
+		REQUIRE(std::string(answer) == "[ERR] Can't submit flag from NOP team\n");
+	}
+
+	SECTION("flag of a regular team passes the NOP gate") {
+		// invalid MAC => rejected later at the MAC check, proving the NOP check did not fire
+		std::string flag = build_flag(7, 1, 1, 0, false);
+		const char *answer = progress_flag(flag.c_str(), (int) flag.size(), &addr, nullptr);
+		REQUIRE(std::string(answer) == "[ERR] Invalid flag\n");
+	}
+
+	SECTION("NOP check disabled when nopTeamId = -1") {
+		Config::nopTeamId = -1;
+		// round > 0x7fff => rejected as "issued for testing purposes" right after the NOP
+		// gate, proving the NOP check stayed inactive for a team_id=0 flag
+		std::string flag = build_flag(0, 1, (uint16_t) 0x8000, 0, true);
+		const char *answer = progress_flag(flag.c_str(), (int) flag.size(), &addr, nullptr);
+		REQUIRE(std::string(answer) == "[ERR] Invalid flag (issued for testing purposes)\n");
 	}
 }

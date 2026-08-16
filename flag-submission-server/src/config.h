@@ -28,6 +28,10 @@ public:
 
 	static int flagRoundsValid;
 
+	// NOP team id. -1 = disabled (no NOP team configured).
+	// NOTE: 0 is a VALID team id here — a deployment may legitimately assign
+	// the NOP team id 0, so never use truthiness (`if (nopTeamId)`) to test
+	// whether a NOP team is configured; use `nopTeamId >= 0`.
 	static int nopTeamId;
 
 	static uint16_t getTeamIdFromIp(uint8_t ip0, uint8_t ip1, uint8_t ip2, uint8_t ip3);

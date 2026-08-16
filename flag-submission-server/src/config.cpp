@@ -125,7 +125,9 @@ void Config::load(const std::string &filename) {
     }
 
     // Load scoring config
-    nopTeamId = 0;
+    // -1 = NOP team disabled. 0 is a valid team id (some deployments use team 0
+    // as NOP team), so the disabled sentinel must not be 0.
+    nopTeamId = -1;
     flagRoundsValid = 10;
     if (config["scoring"] && config["scoring"].IsMap()) {
         const auto &scoring = config["scoring"];

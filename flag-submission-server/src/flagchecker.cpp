@@ -130,7 +130,8 @@ const char *progress_flag(const char *flag, int len, struct sockaddr_in *addr, u
 			return "[ERR] Invalid flag (team)\n";
 		}
 		// check NOP team / test runs (with round < 0)
-		if (Config::nopTeamId && binary_flag.team_id == Config::nopTeamId) {
+		// nopTeamId >= 0 means a NOP team is configured (0 is a valid team id).
+		if (Config::nopTeamId >= 0 && binary_flag.team_id == Config::nopTeamId) {
 			statistics::countFlag(this_team, statistics::FlagState::Nop);
 			return "[ERR] Can't submit flag from NOP team\n";
 		}
@@ -143,7 +144,7 @@ const char *progress_flag(const char *flag, int len, struct sockaddr_in *addr, u
 			statistics::countFlag(this_team, statistics::FlagState::Own);
 			return "[ERR] This is your own flag\n";
 		}
-		if (Config::nopTeamId && this_team == Config::nopTeamId) {
+		if (Config::nopTeamId >= 0 && this_team == Config::nopTeamId) {
 			return "[ERR] Can't submit flag as NOP team\n";
 		}
 

@@ -1,0 +1,26 @@
+{
+  "__comment": "testconfig.json variant with nop_team_id = 0 (NOP team is team 0, a valid team id)",
+  "databases": {
+    "postgres": {
+      "server": "",
+      "port": 5432,
+      "username": "",
+      "password": "",
+      "database": "saarctf_2"
+    },
+    "redis": {
+      "host": "localhost",
+      "port": 6379,
+      "db": 3
+    }
+  },
+  "secret_flags": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "scoring": {
+    "flags_rounds_valid": 10,
+    "nop_team_id": 0
+  },
+  "network": {
+    "team_range": [127, [200, 256, 0], [1, 200, 0], 0, 24],
+    "vpn_peer_ips": [127, [200, 256, 52], [1, 200, 0], 1]
+  }
+}
