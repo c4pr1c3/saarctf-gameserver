@@ -21,9 +21,6 @@ using namespace std;
 volatile int Redis::current_round = -1;
 volatile int Redis::state = STOPPED;
 static ev::timer reconnect_timer;
-// active Redis connection (main loop); used to re-sync the per-match flag key on
-// every round change. nullptr while disconnected.
-static redisAsyncContext *active_context = nullptr;
 
 
 static void reconnect() {
@@ -40,11 +37,13 @@ static void setCurrentRound(const char *round) {
 		Redis::current_round = newRound;
 		cout << "[Redis] Current round: " << Redis::current_round << endl;
 		printFlagStatsForRound(oldRound);
-		// defense in depth: re-read the per-match flag key on every round change, so a
-		// lost pubsub message self-heals within one round (see onDatabaseSelected)
-		if (active_context != nullptr) {
-			redisAsyncCommand(active_context, onGetKey, (void *) apply_match_flag_key, "GET " MATCH_FLAG_KEY);
-		}
+		// NOTE: no per-round re-GET of the match key here. A redisAsyncContext in
+		// SUBSCRIBE mode only accepts (P|S)SUBSCRIBE/(P|S)UNSUBSCRIBE/PING/QUIT —
+		// a GET on this connection makes the server reply with an error and the
+		// submitter crash-looped (deploy evidence 2026-08-17). The startup GET in
+		// onDatabaseSelected + the SUBSCRIBE notification + the reconnect re-GET
+		// cover every key-transition path (a lost pubsub message implies a
+		// disconnect, which re-GETs).
 	}
 }
 
@@ -133,7 +132,6 @@ static void onDatabaseSelected(redisAsyncContext *context, void *r, void *privda
 	}
 
 	redisAsyncCommand(context, nullptr, nullptr, "CLIENT SETNAME submission_server");
-	active_context = context;
 	redisAsyncCommand(context, onGetKey, (void *) setCurrentState, "GET " CURRENT_STATE_KEY);
 	redisAsyncCommand(context, onGetKey, (void *) setCurrentRound, "GET " CURRENT_ROUND_KEY);
 	// per-match flag key: applied to Config::hmac_effective_key (falls back to the
@@ -181,9 +179,6 @@ static void onConnect(redisAsyncContext *context, int status) {
 }
 
 static void onDisconnect(const redisAsyncContext *context, int status) {
-	if (context == active_context) {
-		active_context = nullptr;
-	}
 	if (status == REDIS_OK) {
 		cerr << "[Redis] Disconnected" << endl;
 	} else {
