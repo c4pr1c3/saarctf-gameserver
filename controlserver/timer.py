@@ -13,6 +13,7 @@ You can listen to all events emitted by this timer using:
 
 """
 
+import secrets
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -47,6 +48,24 @@ def redis_set_and_publish(key: str, value: str | bytes | int | None, redis: Stri
     redis = redis or get_redis_connection()
     redis.set(key, value)
     redis.publish(key, value)
+
+
+# Redis key holding the per-match flag secret (hex-encoded 32 random bytes).
+# Read by gamelib (get_flag_hmac_key) and by the flag-submission-server
+# (which subscribes to this key exactly like timing:currentRound).
+MATCH_FLAG_KEY_REDIS_KEY = "secrets:flag_key_match"
+
+
+def set_new_match_flag_key(redis: StrictRedis | None = None) -> None:
+    """
+    Generate a fresh per-match flag secret and distribute it via Redis (SET + PUBLISH).
+
+    Called at every match boundary: when the CTF starts from STOPPED (on_start_ctf)
+    and when the CTF is reset (scripts/reset_ctf.py). Within a match - including
+    suspend/resume - the secret is left untouched, so flag values remain stable
+    and cannot be replayed across matches.
+    """
+    redis_set_and_publish(MATCH_FLAG_KEY_REDIS_KEY, secrets.token_bytes(32).hex(), redis)
 
 
 class CTFTimerBase(ABC):
@@ -313,6 +332,10 @@ class CTFTimer(CTFTimerBase):
             l.on_end_tick(tick, dt)
 
     def on_start_ctf(self) -> None:
+        # A new match begins (STOPPED -> RUNNING): rotate the per-match flag secret
+        # before anything else, so all flags of this match are minted under the new
+        # key and flags of previous matches become invalid.
+        set_new_match_flag_key()
         self.update_tick_times()
         for l in self.listener:
             l.on_start_ctf()

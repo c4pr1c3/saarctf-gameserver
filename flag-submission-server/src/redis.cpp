@@ -12,6 +12,7 @@
 
 #define CURRENT_STATE_KEY "timing:state"
 #define CURRENT_ROUND_KEY "timing:currentRound"
+#define MATCH_FLAG_KEY "secrets:flag_key_match"
 
 
 using namespace std;
@@ -20,12 +21,17 @@ using namespace std;
 volatile int Redis::current_round = -1;
 volatile int Redis::state = STOPPED;
 static ev::timer reconnect_timer;
+// active Redis connection (main loop); used to re-sync the per-match flag key on
+// every round change. nullptr while disconnected.
+static redisAsyncContext *active_context = nullptr;
 
 
 static void reconnect() {
 	reconnect_timer.set(3);
 	reconnect_timer.start();
 }
+
+static void onGetKey(redisAsyncContext *context, void *r, void *privdata);
 
 static void setCurrentRound(const char *round) {
 	int newRound = atoi(round);
@@ -34,6 +40,11 @@ static void setCurrentRound(const char *round) {
 		Redis::current_round = newRound;
 		cout << "[Redis] Current round: " << Redis::current_round << endl;
 		printFlagStatsForRound(oldRound);
+		// defense in depth: re-read the per-match flag key on every round change, so a
+		// lost pubsub message self-heals within one round (see onDatabaseSelected)
+		if (active_context != nullptr) {
+			redisAsyncCommand(active_context, onGetKey, (void *) apply_match_flag_key, "GET " MATCH_FLAG_KEY);
+		}
 	}
 }
 
@@ -122,10 +133,15 @@ static void onDatabaseSelected(redisAsyncContext *context, void *r, void *privda
 	}
 
 	redisAsyncCommand(context, nullptr, nullptr, "CLIENT SETNAME submission_server");
+	active_context = context;
 	redisAsyncCommand(context, onGetKey, (void *) setCurrentState, "GET " CURRENT_STATE_KEY);
 	redisAsyncCommand(context, onGetKey, (void *) setCurrentRound, "GET " CURRENT_ROUND_KEY);
+	// per-match flag key: applied to Config::hmac_effective_key (falls back to the
+	// base key while the key is missing, i.e. before the first match started)
+	redisAsyncCommand(context, onGetKey, (void *) apply_match_flag_key, "GET " MATCH_FLAG_KEY);
 	redisAsyncCommand(context, onHandleMessage, (void *) setCurrentState, "SUBSCRIBE " CURRENT_STATE_KEY);
 	redisAsyncCommand(context, onHandleMessage, (void *) setCurrentRound, "SUBSCRIBE " CURRENT_ROUND_KEY);
+	redisAsyncCommand(context, onHandleMessage, (void *) apply_match_flag_key, "SUBSCRIBE " MATCH_FLAG_KEY);
 }
 
 static void onAuthenticated(redisAsyncContext *context, void *r, void *privdata) {
@@ -165,6 +181,9 @@ static void onConnect(redisAsyncContext *context, int status) {
 }
 
 static void onDisconnect(const redisAsyncContext *context, int status) {
+	if (context == active_context) {
+		active_context = nullptr;
+	}
 	if (status == REDIS_OK) {
 		cerr << "[Redis] Disconnected" << endl;
 	} else {

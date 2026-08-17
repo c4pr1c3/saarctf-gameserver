@@ -1,6 +1,7 @@
 #include "config.h"
 #include "yaml-cpp/yaml.h"
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 
@@ -74,6 +75,7 @@ static YAML::Node config;
 static const char *postgresConfigString = nullptr;
 static std::unordered_map<std::string, std::string> envConfig;
 unsigned char Config::hmac_secret_key[32];
+unsigned char Config::hmac_effective_key[32];
 std::string Config::flagPrefix = "SAAR";
 int Config::nopTeamId;
 int Config::flagRoundsValid;
@@ -122,6 +124,9 @@ void Config::load(const std::string &filename) {
     }
     if (config["secret_flags"]) {
         decodeHexSecret(config["secret_flags"].as<std::string>(), hmac_secret_key);
+        // reset the effective key to the (new) base key; a per-match secret from
+        // Redis (if any) is re-applied on the next Redis sync
+        memcpy(hmac_effective_key, hmac_secret_key, sizeof hmac_secret_key);
     }
 
     // Load scoring config
@@ -156,8 +161,10 @@ void Config::loadFromEnv() {
         flagPrefix = std::string(getenv("CONFIG_FLAG_PREFIX"));
     if (getenv("CONFIG_FLAG_ROUNDS_VALID") != nullptr)
         flagRoundsValid = std::stoi(getenv("CONFIG_FLAG_ROUNDS_VALID"));
-    if (getenv("CONFIG_SECRET_FLAGS") != nullptr)
+    if (getenv("CONFIG_SECRET_FLAGS") != nullptr) {
         decodeHexSecret(getenv("CONFIG_SECRET_FLAGS"), hmac_secret_key);
+        memcpy(hmac_effective_key, hmac_secret_key, sizeof hmac_secret_key);
+    }
     if (getenv("CONFIG_NOP_TEAM_ID") != nullptr)
         nopTeamId = std::stoi(getenv("CONFIG_NOP_TEAM_ID"));
 

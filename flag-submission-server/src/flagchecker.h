@@ -51,6 +51,11 @@ extern uint32_t max_service_id;
 
 void initModelSizes(uint32_t _max_team_id, uint32_t _max_service_id);
 
+// Fold a per-match secret (hex-encoded, 32 bytes) from Redis into the effective
+// HMAC key (Config::hmac_effective_key). Malformed input is ignored (previous
+// key is kept). Called from the Redis subscriber on the main thread only.
+void apply_match_flag_key(const char *hex);
+
 const char *progress_flag(const char *flag, int len, struct sockaddr_in *addr, uint16_t *team_id_cache);
 
 bool verify_hmac(void *data_start, void *data_end, const char *hmac);

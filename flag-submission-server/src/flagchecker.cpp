@@ -1,4 +1,5 @@
 #include <openssl/hmac.h>
+#include <cctype>
 #include <cstring>
 #include <iostream>
 #include <arpa/inet.h>
@@ -155,6 +156,14 @@ const char *progress_flag(const char *flag, int len, struct sockaddr_in *addr, u
 			statistics::countFlag(this_team, statistics::FlagState::Expired);
 			return "[ERR] Expired\n";
 		}
+		// upper bound of the validity window: a flag from a round that has not started
+		// yet cannot be valid. Without this check, a "future round" flag with a valid
+		// MAC (e.g. leftover values of a previous match or soak test, persisted in a
+		// service's storage) would score forever.
+		if (binary_flag.round > Redis::current_round) {
+			statistics::countFlag(this_team, statistics::FlagState::Expired);
+			return "[ERR] Future round\n";
+		}
 		#endif
 	}
 
@@ -199,12 +208,63 @@ const char *progress_flag(const char *flag, int len, struct sockaddr_in *addr, u
 static EVP_MAC *mac = EVP_MAC_fetch(nullptr, "HMAC", nullptr);
 static char sha256[7] = "SHA256";
 
+static void hmac_sha256(const unsigned char *key, size_t key_len, const void *data, size_t data_len,
+						unsigned char *out32) {
+	EVP_MAC_CTX *ctx = EVP_MAC_CTX_new(mac);
+	OSSL_PARAM params[2];
+	params[0] = OSSL_PARAM_construct_utf8_string("digest", sha256, 0);
+	params[1] = OSSL_PARAM_construct_end();
+	EVP_MAC_init(ctx, key, key_len, params);
+
+	EVP_MAC_update(ctx, (const unsigned char *) data, data_len);
+
+	unsigned char buffer[32];
+	size_t mdlen;
+	EVP_MAC_final(ctx, buffer, &mdlen, sizeof buffer);
+	EVP_MAC_CTX_free(ctx);
+
+	memcpy(out32, buffer, 32);
+}
+
+void apply_match_flag_key(const char *hex) {
+	if (hex == nullptr) return;
+	std::string hex_str(hex);
+
+	// decode 64 hex chars -> 32 bytes (same encoding as the "secret_flags" config entry)
+	unsigned char per_match_secret[32];
+	if (hex_str.length() != 64) {
+		std::cout << "[Redis] Ignoring per-match flag key: wrong length (" << hex_str.length() << " chars)" << std::endl;
+		return;
+	}
+	for (unsigned long i = 0; i < hex_str.length(); i += 2) {
+		if (!isxdigit((unsigned char) hex_str[i]) || !isxdigit((unsigned char) hex_str[i + 1])) {
+			std::cout << "[Redis] Ignoring per-match flag key: not valid hex" << std::endl;
+			return;
+		}
+		per_match_secret[i / 2] = (unsigned char) (int) strtol(hex_str.substr(i, 2).c_str(), nullptr, 16);
+	}
+
+	// Same derivation as gamelib (python), gamelib/gamelib.py get_flag_hmac_key:
+	//   effective_key = HMAC-SHA256(key = base key, msg = per-match secret)
+	unsigned char effective_key[32];
+	hmac_sha256(Config::hmac_secret_key, sizeof Config::hmac_secret_key, per_match_secret, sizeof per_match_secret,
+				effective_key);
+
+	// skip no-op updates: the round sync re-GETs this key on every round, and worker
+	// threads read the key concurrently (rewrites only happen at match boundaries)
+	if (memcmp(effective_key, Config::hmac_effective_key, sizeof effective_key) == 0) return;
+
+	memcpy(Config::hmac_effective_key, effective_key, sizeof effective_key);
+	std::cout << "[Redis] Per-match flag key applied (" << hex_str.substr(0, 8) << "...). "
+			  << "Flags of previous matches are now invalid." << std::endl;
+}
+
 bool verify_hmac(void *data_start, void *data_end, const char *hmac) {
 	EVP_MAC_CTX *ctx = EVP_MAC_CTX_new(mac);
 	OSSL_PARAM params[2];
 	params[0] = OSSL_PARAM_construct_utf8_string("digest", sha256, 0);
 	params[1] = OSSL_PARAM_construct_end();
-	EVP_MAC_init(ctx, Config::hmac_secret_key, sizeof Config::hmac_secret_key, params);
+	EVP_MAC_init(ctx, Config::hmac_effective_key, sizeof Config::hmac_effective_key, params);
 
 	size_t length = ((char *) data_end) - ((char *) data_start);
 	EVP_MAC_update(ctx, (unsigned char *) data_start, length);
@@ -223,7 +283,7 @@ void create_hmac(void *data_start, void *data_end, char *hmac_out) {
 	OSSL_PARAM params[2];
 	params[0] = OSSL_PARAM_construct_utf8_string("digest", sha256, 0);
 	params[1] = OSSL_PARAM_construct_end();
-	EVP_MAC_init(ctx, Config::hmac_secret_key, sizeof Config::hmac_secret_key, params);
+	EVP_MAC_init(ctx, Config::hmac_effective_key, sizeof Config::hmac_effective_key, params);
 
 	size_t length = ((char *) data_end) - ((char *) data_start);
 	EVP_MAC_update(ctx, (unsigned char *) data_start, length);

@@ -52,7 +52,7 @@ def flags_index() -> ResponseReturnValue:
 
             stored_tick, teamid, serviceid, payload = struct.unpack("<HHHH", data[:8])
             mac = binascii.hexlify(data[8:]).decode()
-            real_mac_bin = hmac.HMAC(config.SECRET_FLAG_KEY, data[:8], hashlib.sha256).digest()[:MAC_LENGTH]
+            real_mac_bin = hmac.HMAC(gamelib.gamelib.get_flag_hmac_key(), data[:8], hashlib.sha256).digest()[:MAC_LENGTH]
             real_mac = binascii.hexlify(real_mac_bin).decode()
             team = Team.query.filter(Team.id == teamid).first()
             service = Service.query.filter(Service.id == serviceid).first()

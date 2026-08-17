@@ -20,7 +20,7 @@ from enochecker_core import (
 )
 
 from checker_runner.checker_execution import CheckerRunner, CheckerRunOutput
-from gamelib import MAC_LENGTH, get_flag_regex
+from gamelib import MAC_LENGTH, get_flag_regex, get_flag_hmac_key
 from saarctf_commons.config import config
 from saarctf_commons.redis import get_redis_connection
 
@@ -113,7 +113,7 @@ class EnoCheckerRunner(AsyncCheckerRunner):
 
     def get_flag(self, team_id: int, tick: int, payload: int = 0) -> str:
         data = struct.pack("<HHHH", tick & 0xFFFF, team_id, self.service_id, payload)
-        mac = hmac.new(config.SECRET_FLAG_KEY, data, hashlib.sha256).digest()[
+        mac = hmac.new(get_flag_hmac_key(), data, hashlib.sha256).digest()[
             :MAC_LENGTH
         ]
         flag = base64.b64encode(data + mac).replace(b"+", b"-").replace(b"/", b"_")

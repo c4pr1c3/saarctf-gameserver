@@ -55,10 +55,15 @@ def reset_redis() -> None:
     conn = redis.StrictRedis.from_url(config.celery_redis_url())
     conn.flushdb()
 
-    from controlserver.timer import CTFTimer
+    from controlserver.timer import CTFTimer, set_new_match_flag_key
 
     timer = CTFTimer()
     timer.on_update_times()  # update without init - write default values
+
+    # Fresh per-match flag secret. Also (re-)written on every CTF start
+    # (timer.on_start_ctf); writing it here closes the window in which the old
+    # match's key is flushed but no new one is present yet.
+    set_new_match_flag_key()
 
 
 def reset_broker() -> None:

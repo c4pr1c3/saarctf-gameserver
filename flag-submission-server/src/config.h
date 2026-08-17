@@ -24,6 +24,13 @@ public:
 
 	static unsigned char hmac_secret_key[32];
 
+	// Effective key actually used for flag MACs: the base key (hmac_secret_key)
+	// folded with the per-match secret from Redis ("secrets:flag_key_match"), see
+	// flagchecker.cpp / apply_match_flag_key. Equals hmac_secret_key as long as no
+	// per-match secret is known. NOTE for tests: if you overwrite hmac_secret_key
+	// directly, sync this field as well.
+	static unsigned char hmac_effective_key[32];
+
 	static std::string flagPrefix;
 
 	static int flagRoundsValid;
